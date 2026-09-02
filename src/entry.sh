@@ -11,44 +11,73 @@ cd /run
 
 . start.sh      # Startup hook
 . utils.sh      # Load functions
-. reset.sh      # Initialize system
+. init.sh       # Initialize system
+. memory.sh     # Check memory
 . server.sh     # Start webserver
+. download.sh   # Load functions
 . define.sh     # Define versions
 . mido.sh       # Download Windows
+. answer.sh     # Setup answer files
+. legacy.sh     # Legacy installation
+. image.sh      # Detect image files
 . install.sh    # Run installation
 . disk.sh       # Initialize disks
 . display.sh    # Initialize graphics
+. audio.sh      # Initialize audio
 . network.sh    # Initialize network
 . samba.sh      # Configure samba
 . boot.sh       # Configure boot
 . proc.sh       # Initialize processor
 . power.sh      # Configure shutdown
-. memory.sh     # Check available memory
+. balloon.sh    # Initialize ballooning
 . config.sh     # Configure arguments
 . finish.sh     # Finish initialization
 
 trap - ERR
 
-version=$(qemu-system-aarch64 --version | head -n 1 | cut -d '(' -f 1 | awk '{ print $NF }')
-info "Booting ${APP}${BOOT_DESC} using QEMU v$version..."
+cmd=(qemu-system-aarch64)
+version=$("${cmd[@]}" --version | awk 'NR==1 { print $4 }')
+info "Booting ${APP}${BOOT_DESC} using QEMU v$version..." && echo
 
-if [ -z "$CPU_PIN" ]; then
-  { qemu-system-aarch64 ${ARGS:+ $ARGS} >"$QEMU_OUT" 2>"$QEMU_LOG"; rc=$?; } || :
-else
-  { taskset -c "$CPU_PIN" qemu-system-aarch64 ${ARGS:+ $ARGS} >"$QEMU_OUT" 2>"$QEMU_LOG"; rc=$?; } || :
+pipe="$QEMU_DIR/qemu.pipe"
+rm -f "$pipe" && mkfifo "$pipe"
+
+tee "$QEMU_PTY" <"$pipe" |
+sed -u \
+  -e 's/\x1B\[[=0-9;]*[a-z]//gi' \
+  -e 's/\x1B\x63//g' \
+  -e 's/\x1B\[[=?]7l//g' \
+  -e '/^$/d' \
+  -e 's/\x44\x53\x73//g' \
+  -e 's/failed to load Boot/skipped Boot/g' \
+  -e 's/0): Not Found/0)/g' &
+
+output=$!
+
+if [ -n "$CPU_PIN" ]; then
+  cmd=(taskset -c "$CPU_PIN" "${cmd[@]}")
 fi
 
-(( rc != 0 )) && error "$(<"$QEMU_LOG")" && exit 15
+if ! enabled "$SHUTDOWN"; then
+  exec "${cmd[@]}" ${ARGS:+ $ARGS} >"$pipe" 2>&1
+fi
 
-terminal
-( sleep 30; boot ) &
-tail -fn +0 "$QEMU_LOG" --pid=$$ 2>/dev/null &
-cat "$QEMU_TERM" 2> /dev/null | tee "$QEMU_PTY" | \
-sed -u -e 's/\x1B\[[=0-9;]*[a-z]//gi' \
--e 's/\x1B\x63//g' -e 's/\x1B\[[=?]7l//g' \
--e '/^$/d' -e 's/\x44\x53\x73//g' \
--e 's/failed to load Boot/skipped Boot/g' \
--e 's/0): Not Found/0)/g' & wait $! || :
+if ! interactive; then
+  "${cmd[@]}" ${ARGS:+ $ARGS} >"$pipe" 2>&1 &
+else
+  startConsole "$pipe"
+  startQemu "${cmd[@]}" ${ARGS:+ $ARGS} >"$pipe" 2>&1
+fi
+
+pid=$!
+waitForBoot "$pid" 30 &
+
+rc=0
+wait "$pid" || rc=$?
+interactive && stopConsole
+wait "$output" || :
+
+[ -f "$QEMU_END" ] && exit "$rc"
 
 sleep 1 & wait $!
-[ ! -f "$QEMU_END" ] && finish 0
+finish "$rc"

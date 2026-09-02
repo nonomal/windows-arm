@@ -1,38 +1,59 @@
 # syntax=docker/dockerfile:1
 
+FROM scratch AS base
+ADD --exclude=src/display.sh https://github.com/dockur/windows.git#master /
+
 FROM scratch
-COPY --from=qemux/qemu-arm:7.28 / /
+COPY --from=qemux/qemu-arm:7.50 / /
 
 ARG TARGETARCH
+
 ARG VERSION_ARG="0.00"
+ARG VERSION_WSDD="1.27"
+ARG VERSION_VIRTIO="0.1.285"
+ARG VERSION_BLINTER="1.0.112"
+
 ARG DEBCONF_NOWARNINGS="yes"
 ARG DEBIAN_FRONTEND="noninteractive"
 ARG DEBCONF_NONINTERACTIVE_SEEN="true"
 
-RUN set -eu && \
-    apt-get update && \
-    apt-get --no-install-recommends -y install \
-        samba \
-        wimtools \
-        dos2unix \
-        cabextract \
-        libxml2-utils \
-        libarchive-tools && \
-    wget "https://github.com/gershnik/wsdd-native/releases/download/v1.22/wsddn_1.22_${TARGETARCH}.deb" -O /tmp/wsddn.deb -q && \
-    dpkg -i /tmp/wsddn.deb && \
-    apt-get clean && \
-    echo "$VERSION_ARG" > /run/version && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+RUN <<EOF
+  set -eu
 
-COPY --chmod=755 ./src /run/
-COPY --chmod=755 ./assets /run/assets
+  apt-get update
+  apt-get --no-install-recommends -y install \
+    gcab \
+    samba \
+    mtools \
+    wimtools \
+    dos2unix \
+    cabextract \
+    xmlstarlet \
+    icu-devtools \
+    libxml2-utils \
+    libarchive-tools
 
-ADD --chmod=755 https://raw.githubusercontent.com/dockur/windows/master/src/mido.sh /run/
-ADD --chmod=755 https://raw.githubusercontent.com/dockur/windows/master/src/power.sh /run/
-ADD --chmod=755 https://raw.githubusercontent.com/dockur/windows/master/src/samba.sh /run/
-ADD --chmod=755 https://raw.githubusercontent.com/dockur/windows/master/src/install.sh /run/
+  # Install Blinter
+  python3 -m pip install --break-system-packages --root-user-action=ignore --no-cache-dir "Blinter==${VERSION_BLINTER}"
 
-ADD --chmod=664 https://github.com/qemus/virtiso-arm/releases/download/v0.1.285-1/virtio-win-0.1.285.tar.xz /var/drivers.txz
+  # Install wsddn package
+  wget "https://github.com/gershnik/wsdd-native/releases/download/v${VERSION_WSDD}/wsddn_${VERSION_WSDD}_${TARGETARCH}.deb" -O /tmp/wsddn.deb -q --timeout=10
+  dpkg -i /tmp/wsddn.deb
+
+  apt-get clean
+
+  # Set version file
+  echo "$VERSION_ARG" > /etc/version
+
+  rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+EOF
+
+COPY --from=base --chmod=755 /src/ /run/
+COPY --chmod=755 ./src/ /run/
+COPY --chmod=755 ./assets/ /run/assets/
+COPY --from=qemux/udfread:1.2.0 /udfread /usr/bin/
+
+ADD --chmod=664 https://github.com/qemus/virtiso-arm/releases/download/v${VERSION_VIRTIO}-1/virtio-win-${VERSION_VIRTIO}.tar.xz /var/drivers.txz
 
 VOLUME /storage
 EXPOSE 3389 8006

@@ -2,408 +2,145 @@
 set -Eeuo pipefail
 
 : "${KEY:=""}"
+: "${HOST:=""}"
 : "${WIDTH:=""}"
 : "${HEIGHT:=""}"
 : "${VERIFY:=""}"
+: "${DOMAIN:=""}"
 : "${REGION:=""}"
 : "${EDITION:=""}"
 : "${MANUAL:=""}"
 : "${REMOVE:=""}"
 : "${VERSION:=""}"
-: "${DETECTED:=""}"
+: "${COMMAND:=""}"
 : "${KEYBOARD:=""}"
 : "${LANGUAGE:=""}"
 : "${USERNAME:=""}"
 : "${PASSWORD:=""}"
+: "${SHORTCUT:=""}"
+: "${DOMAIN_OU:=""}"
+: "${WORKGROUP:=""}"
+: "${AUTOLOGIN:=""}"
 
-MIRRORS=4
-
-isCompatible() {
-
-  # ARMv8.0 cannot run Windows 11 builds 24H2 and up.
-  if [[ "${ARCH,,}" == "arm64" ]] && ! grep -qw 'Features.*atomics' /proc/cpuinfo; then
-    return 1
-  fi
-
-  return 0
-}
+# Sanitize variables
+KEY=$(strip "$KEY")
+HOST=$(strip "$HOST")
+WIDTH=$(strip "$WIDTH")
+HEIGHT=$(strip "$HEIGHT")
+DOMAIN=$(strip "$DOMAIN")
+REGION=$(strip "$REGION")
+EDITION=$(strip "$EDITION")
+KEYBOARD=$(strip "$KEYBOARD")
+LANGUAGE=$(strip "$LANGUAGE")
+USERNAME=$(strip "$USERNAME")
+DOMAIN_OU=$(strip "$DOMAIN_OU")
+WORKGROUP=$(strip "$WORKGROUP")
 
 parseVersion() {
 
-  if [[ "${VERSION}" == \"*\" || "${VERSION}" == \'*\' ]]; then
-    VERSION="${VERSION:1:-1}"
-  fi
-
-  VERSION=$(expr "$VERSION" : "^\ *\(.*[^ ]\)\ *$")
+  DETECTED=""
+  VERSION=$(strip "$VERSION")
   [ -z "$VERSION" ] && VERSION="win11"
 
   local msg="is not available for ARM64 CPU's."
+  local fail="Your CPU architecture is below ARMv8.1, and does not support Windows 11 build 24H2 and up."
 
   case "${VERSION,,}" in
     "11" | "11p" | "win11" | "pro11" | "win11p" | "windows11" | "windows 11" )
       VERSION="win11arm64"
-      ;;
+      ! isCompatible && MIDO="N" && warn "$fail An older build (23H2) will be downloaded." ;;
     "11e" | "win11e" | "windows11e" | "windows 11e" )
       VERSION="win11arm64-enterprise-eval"
-      ;;
-    "11i" | "11iot" | "iot11" | "win11i" | "win11-iot" | "win11arm64-iot" )
-      VERSION="win11arm64-enterprise-ltsc-eval"
-      [ -z "$DETECTED" ] && DETECTED="win11arm64-ltsc"
-      ;;
+      ! isCompatible && MIDO="N" && warn "$fail An older build (23H2) will be downloaded." ;;
     "11l" | "11ltsc" | "ltsc11" | "win11l" | "win11-ltsc" | "win11arm64-ltsc" )
       VERSION="win11arm64-enterprise-ltsc-eval"
-      [ -z "$DETECTED" ] && DETECTED="win11arm64-ltsc"
-      ;;
+      ! isCompatible && error "$fail" && return 1 ;;
+    "11i" | "11iot" | "iot11" | "win11i" | "win11-iot" | "win11arm64-iot" )
+      VERSION="win11arm64-enterprise-iot-eval"
+      ! isCompatible && error "$fail" && return 1 ;;
     "10" | "10p" | "win10" | "pro10" | "win10p" | "windows10" | "windows 10" )
-      VERSION="win10arm64"
-      ;;
+      VERSION="win10arm64" ;;
     "10e" | "win10e" | "windows10e" | "windows 10e" )
-      VERSION="win10arm64-enterprise-eval"
-      ;;
-    "10i" | "10iot" | "iot10" | "win10i" | "win10-iot" | "win10arm64-iot" )
-      VERSION="win10arm64-enterprise-ltsc-eval"
-      [ -z "$DETECTED" ] && DETECTED="win10arm64-ltsc"
-      ;;
+      VERSION="win10arm64-enterprise-eval" ;;
     "10l" | "10ltsc" | "ltsc10" | "win10l" | "win10-ltsc" | "win10arm64-ltsc" )
-      VERSION="win10arm64-enterprise-ltsc-eval"
-      [ -z "$DETECTED" ] && DETECTED="win10arm64-ltsc"
-      ;;
+      VERSION="win10arm64-enterprise-ltsc-eval" ;;
+    "10i" | "10iot" | "iot10" | "win10i" | "win10-iot" | "win10arm64-iot" )
+      VERSION="win10arm64-enterprise-iot-eval" ;;
     "8" | "8p" | "81" | "81p" | "pro8" | "8.1" | "win8" | "win8p" | "win81" | "win81p" | "windows 8" | \
     "8e" | "81e" | "8.1e" | "win8e" | "win81e" | "windows 8e" )
-      error "Windows 8 $msg" && return 1
-      ;;
+      error "Windows 8 $msg" && return 1 ;;
     "7" | "win7" | "windows7" | "windows 7" | "7u" | "win7u" | "windows7u" | "windows 7u" | "7e" | \
     "win7e" | "windows7e" | "windows 7e" | "7x86" | "win7x86" | "win732" | "windows7x86" | "7ux86" | \
     "7u32" | "win7x86-ultimate" | "7ex86" | "7e32" | "win7x86-enterprise" )
-      error "Windows 7 $msg" && return 1
-      ;;
+      error "Windows 7 $msg" && return 1 ;;
     "vista" | "vs" | "6" | "winvista" | "windowsvista" | "windows vista" | "vistu" | "vu" | "6u" | "winvistu" | \
     "viste" | "ve" | "6e" | "winviste" | "vistax86" | "vista32" | "6x86" | "winvistax86" | "windowsvistax86" | \
     "vux86" | "vu32" | "winvistax86-ultimate" | "vex86" | "ve32" | "winvistax86-enterprise" )
-      error "Windows Vista $msg" && return 1
-      ;;
+      error "Windows Vista $msg" && return 1 ;;
     "xp" | "xp32" | "xpx86" | "5" | "5x86" | "winxp" | "winxp86" | "windowsxp" | "windows xp" | \
     "xp64" | "xpx64" | "5x64" | "winxp64" | "winxpx64" | "windowsxp64" | "windowsxpx64" )
-      error "Windows XP $msg" && return 1
-      ;;
+      error "Windows XP $msg" && return 1 ;;
     "2k" | "2000" | "win2k" | "win2000" | "windows2k" | "windows2000" )
-      error "Windows 2000 $msg" && return 1
-      ;;
+      error "Windows 2000 $msg" && return 1 ;;
+    "me" | "winme" | "win9x" | "windowsme" | "windows me" )
+      error "Windows ME $msg" && return 1 ;;
+    "98" | "98se" | "win98" | "win98se" | "windows98" | "windows98se" | "windows 98" | "windows 98 se" )
+      error "Windows 98 $msg" && return 1 ;;
+    "95" | "95c" | "win95" | "win95c" | "windows95" | "windows 95" )
+      error "Windows 95 $msg" && return 1 ;;
     "25" | "2025" | "win25" | "win2025" | "windows2025" | "windows 2025" )
-      error "Windows Server 2025 $msg" && return 1
-      ;;
+      error "Windows Server 2025 $msg" && return 1 ;;
     "22" | "2022" | "win22" | "win2022" | "windows2022" | "windows 2022" )
-      error "Windows Server 2022 $msg" && return 1
-      ;;
+      error "Windows Server 2022 $msg" && return 1 ;;
     "19" | "2019" | "win19" | "win2019" | "windows2019" | "windows 2019" )
-      error "Windows Server 2019 $msg" && return 1
-      ;;
+      error "Windows Server 2019 $msg" && return 1 ;;
     "16" | "2016" | "win16" | "win2016" | "windows2016" | "windows 2016" )
-      error "Windows Server 2016 $msg" && return 1
-      ;;
+      error "Windows Server 2016 $msg" && return 1 ;;
     "hv" | "hyperv" | "hyper v" | "hyper-v" | "19hv" | "2019hv" | "win2019hv" )
-      error "Hyper-V Server 2019 $msg" && return 1
-      ;;
+      error "Hyper-V Server 2019 $msg" && return 1 ;;
     "2012" | "2012r2" | "win2012" | "win2012r2" | "windows2012" | "windows 2012" )
-      error "Windows Server 2012 $msg" && return 1
-      ;;
+      error "Windows Server 2012 $msg" && return 1 ;;
     "2008" | "2008r2" | "win2008" | "win2008r2" | "windows2008" | "windows 2008" )
-      error "Windows Server 2008 $msg" && return 1
-      ;;
+      error "Windows Server 2008 $msg" && return 1 ;;
     "2003" | "2003r2" | "win2003" | "win2003r2" | "windows2003" | "windows 2003" )
-      error "Windows Server 2003 $msg" && return 1
-      ;;
+      error "Windows Server 2003 $msg" && return 1 ;;
     "tiny11" | "tiny 11" )
       VERSION="tiny11"
-      [ -z "$DETECTED" ] && DETECTED="win11arm64"
-      ;;
+      DETECTED="win11arm64"
+      ! isCompatible && error "$fail" && return 1 ;;
     "core11" | "core 11" )
       VERSION="core11"
-      [ -z "$DETECTED" ] && DETECTED="win11arm64"
-      ;;
+      DETECTED="win11arm64"
+      ! isCompatible && error "$fail" && return 1 ;;
    "tiny10" | "tiny 10" )
-      error "Tiny 10 $msg" && return 1
-      ;;
+      error "Tiny 10 $msg" && return 1 ;;
+    "reactos" | "react os" )
+      error "Reactos $msg" && return 1 ;;
   esac
 
-  if [[ "${VERSION,,}" == "win11"* || "${DETECTED,,}" == "win11"* ]]; then
-    if ! isCompatible; then
-      warn "Your CPU architecture is below ARMv8.1, and does not support Windows 11 build 24H2 and up."
-    fi
-  fi
-
-  return 0
-}
-
-getLanguage() {
-
-  local id="$1"
-  local ret="$2"
-  local lang=""
-  local desc=""
-  local short=""
-  local culture=""
-
-  case "${id,,}" in
-    "ar" | "ar-"* )
-      short="ar"
-      lang="Arabic"
-      desc="$lang"
-      culture="ar-SA" ;;
-    "bg" | "bg-"* )
-      short="bg"
-      lang="Bulgarian"
-      desc="$lang"
-      culture="bg-BG" ;;
-    "cs" | "cs-"* | "cz" | "cz-"* )
-      short="cs"
-      lang="Czech"
-      desc="$lang"
-      culture="cs-CZ" ;;
-    "da" | "da-"* | "dk" | "dk-"* )
-      short="da"
-      lang="Danish"
-      desc="$lang"
-      culture="da-DK" ;;
-    "de" | "de-"* )
-      short="de"
-      lang="German"
-      desc="$lang"
-      culture="de-DE" ;;
-    "el" | "el-"* | "gr" | "gr-"* )
-      short="el"
-      lang="Greek"
-      desc="$lang"
-      culture="el-GR" ;;
-    "gb" | "en-gb" )
-      short="en-gb"
-      lang="English International"
-      desc="English"
-      culture="en-GB" ;;
-    "en" | "en-"* )
-      short="en"
-      lang="English"
-      desc="English"
-      culture="en-US" ;;
-    "mx" | "es-mx" )
-      short="mx"
-      lang="Spanish (Mexico)"
-      desc="Spanish"
-      culture="es-MX" ;;
-    "es" | "es-"* )
-      short="es"
-      lang="Spanish"
-      desc="$lang"
-      culture="es-ES" ;;
-    "et" | "et-"* )
-      short="et"
-      lang="Estonian"
-      desc="$lang"
-      culture="et-EE" ;;
-    "fi" | "fi-"* )
-      short="fi"
-      lang="Finnish"
-      desc="$lang"
-      culture="fi-FI" ;;
-    "ca" | "fr-ca" )
-      short="ca"
-      lang="French Canadian"
-      desc="French"
-      culture="fr-CA" ;;
-    "fr" | "fr-"* )
-      short="fr"
-      lang="French"
-      desc="$lang"
-      culture="fr-FR" ;;
-    "he" | "he-"* | "il" | "il-"* )
-      short="he"
-      lang="Hebrew"
-      desc="$lang"
-      culture="he-IL" ;;
-    "hr" | "hr-"* | "cr" | "cr-"* )
-      short="hr"
-      lang="Croatian"
-      desc="$lang"
-      culture="hr-HR" ;;
-    "hu" | "hu-"* )
-      short="hu"
-      lang="Hungarian"
-      desc="$lang"
-      culture="hu-HU" ;;
-    "it" | "it-"* )
-      short="it"
-      lang="Italian"
-      desc="$lang"
-      culture="it-IT" ;;
-    "ja" | "ja-"* | "jp" | "jp-"* )
-      short="ja"
-      lang="Japanese"
-      desc="$lang"
-      culture="ja-JP" ;;
-    "ko" | "ko-"* | "kr" | "kr-"* )
-      short="ko"
-      lang="Korean"
-      desc="$lang"
-      culture="ko-KR" ;;
-    "lt" | "lt-"* )
-      short="lt"
-      lang="Lithuanian"
-      desc="$lang"
-      culture="lt-LT" ;;
-    "lv" | "lv-"* )
-      short="lv"
-      lang="Latvian"
-      desc="$lang"
-      culture="lv-LV" ;;
-    "nb" | "nb-"* |"nn" | "nn-"* | "no" | "no-"* )
-      short="no"
-      lang="Norwegian"
-      desc="$lang"
-      culture="nb-NO" ;;
-    "nl" | "nl-"* )
-      short="nl"
-      lang="Dutch"
-      desc="$lang"
-      culture="nl-NL" ;;
-    "pl" | "pl-"* )
-      short="pl"
-      lang="Polish"
-      desc="$lang"
-      culture="pl-PL" ;;
-    "br" | "pt-br" )
-      short="pt"
-      lang="Brazilian Portuguese"
-      desc="Portuguese"
-      culture="pt-BR" ;;
-    "pt" | "pt-"* )
-      short="pp"
-      lang="Portuguese"
-      desc="$lang"
-      culture="pt-BR" ;;
-    "ro" | "ro-"* )
-      short="ro"
-      lang="Romanian"
-      desc="$lang"
-      culture="ro-RO" ;;
-    "ru" | "ru-"* )
-      short="ru"
-      lang="Russian"
-      desc="$lang"
-      culture="ru-RU" ;;
-    "sk" | "sk-"* )
-      short="sk"
-      lang="Slovak"
-      desc="$lang"
-      culture="sk-SK" ;;
-    "sl" | "sl-"* | "si" | "si-"* )
-      short="sl"
-      lang="Slovenian"
-      desc="$lang"
-      culture="sl-SI" ;;
-    "sr" | "sr-"* )
-      short="sr"
-      lang="Serbian Latin"
-      desc="Serbian"
-      culture="sr-Latn-RS" ;;
-    "sv" | "sv-"* | "se" | "se-"* )
-      short="sv"
-      lang="Swedish"
-      desc="$lang"
-      culture="sv-SE" ;;
-    "th" | "th-"* )
-      short="th"
-      lang="Thai"
-      desc="$lang"
-      culture="th-TH" ;;
-    "tr" | "tr-"* )
-      short="tr"
-      lang="Turkish"
-      desc="$lang"
-      culture="tr-TR" ;;
-    "ua" | "ua-"* | "uk" | "uk-"* )
-      short="uk"
-      lang="Ukrainian"
-      desc="$lang"
-      culture="uk-UA" ;;
-    "hk" | "zh-hk" | "cn-hk" )
-      short="hk"
-      lang="Chinese (Traditional)"
-      desc="Chinese HK"
-      culture="zh-TW" ;;
-    "tw" | "zh-tw" | "cn-tw" )
-      short="tw"
-      lang="Chinese (Traditional)"
-      desc="Chinese TW"
-      culture="zh-TW" ;;
-    "zh" | "zh-"* | "cn" | "cn-"* )
-      short="cn"
-      lang="Chinese (Simplified)"
-      desc="Chinese"
-      culture="zh-CN" ;;
-  esac
-
-  case "${ret,,}" in
-    "desc" ) echo "$desc" ;;
-    "name" ) echo "$lang" ;;
-    "code" ) echo "$short" ;;
-    "culture" ) echo "$culture" ;;
-    *) echo "$desc";;
-  esac
+  initMirrors 4 || return 1
 
   return 0
 }
 
 parseLanguage() {
 
-  REGION="${REGION//_/-/}"
-  KEYBOARD="${KEYBOARD//_/-/}"
-  LANGUAGE="${LANGUAGE//_/-/}"
+  REGION="${REGION//_/-}"
+  KEYBOARD="${KEYBOARD//_/-}"
+  LANGUAGE="${LANGUAGE//_/-}"
 
   [ -z "$LANGUAGE" ] && LANGUAGE="en"
 
-  case "${LANGUAGE,,}" in
-    "arabic" | "arab" ) LANGUAGE="ar" ;;
-    "bulgarian" | "bu" ) LANGUAGE="bg" ;;
-    "chinese" | "cn" ) LANGUAGE="zh" ;;
-    "croatian" | "cr" | "hrvatski" ) LANGUAGE="hr" ;;
-    "czech" | "cz" | "cesky" ) LANGUAGE="cs" ;;
-    "danish" | "dk" | "danske" ) LANGUAGE="da" ;;
-    "dutch" | "nederlands" ) LANGUAGE="nl" ;;
-    "english" | "gb" | "british" ) LANGUAGE="en" ;;
-    "estonian" | "eesti" ) LANGUAGE="et" ;;
-    "finnish" | "suomi" ) LANGUAGE="fi" ;;
-    "french" | "français" | "francais" ) LANGUAGE="fr" ;;
-    "german" | "deutsch" ) LANGUAGE="de" ;;
-    "greek" | "gr" ) LANGUAGE="el" ;;
-    "hebrew" | "il" ) LANGUAGE="he" ;;
-    "hungarian" | "magyar" ) LANGUAGE="hu" ;;
-    "italian" | "italiano" ) LANGUAGE="it" ;;
-    "japanese" | "jp" ) LANGUAGE="ja" ;;
-    "korean" | "kr" ) LANGUAGE="ko" ;;
-    "latvian" | "latvijas" ) LANGUAGE="lv" ;;
-    "lithuanian" | "lietuvos" ) LANGUAGE="lt" ;;
-    "norwegian" | "no" | "nb" | "norsk" ) LANGUAGE="nn" ;;
-    "polish" | "polski" ) LANGUAGE="pl" ;;
-    "portuguese" | "pt" | "br" ) LANGUAGE="pt-br" ;;
-    "português" | "portugues" ) LANGUAGE="pt-br" ;;
-    "romanian" | "română" | "romana" ) LANGUAGE="ro" ;;
-    "russian" | "ruski" ) LANGUAGE="ru" ;;
-    "serbian" | "serbian latin" ) LANGUAGE="sr" ;;
-    "slovak" | "slovenský" | "slovensky" ) LANGUAGE="sk" ;;
-    "slovenian" | "si" | "slovenski" ) LANGUAGE="sl" ;;
-    "spanish" | "espanol" | "español" ) LANGUAGE="es" ;;
-    "swedish" | "se" | "svenska" ) LANGUAGE="sv" ;;
-    "turkish" | "türk" | "turk" ) LANGUAGE="tr" ;;
-    "thai" ) LANGUAGE="th" ;;
-    "ukrainian" | "ua" ) LANGUAGE="uk" ;;
-  esac
+  local id
+  id=$(getLanguage "$LANGUAGE" "id")
 
-  local culture
-  culture=$(getLanguage "$LANGUAGE" "culture")
-  [ -n "$culture" ] && return 0
+  if [ -z "$id" ]; then
+    error "Invalid LANGUAGE specified, value \"$LANGUAGE\" is not recognized!"
+    return 1
+  fi
 
-  error "Invalid LANGUAGE specified, value \"$LANGUAGE\" is not recognized!"
-  return 1
+  LANGUAGE="$id"
+  return 0
 }
 
 printVersion() {
@@ -427,35 +164,88 @@ printVersion() {
   return 0
 }
 
+printVariant() {
+
+  local id="$1"
+  local desc="$2"
+  local show_eval="${3:-N}"
+
+  desc=$(printVersion "$id" "$desc") || return 1
+
+  case "${id,,}" in
+    *"-iot" | *"-iot-eval" ) desc+=" IoT" ;;
+    *"-ltsc" | *"-ltsc-eval" ) desc+=" LTSC" ;;
+    *"-enterprise" | *"-enterprise-eval" ) desc+=" Enterprise" ;;
+  esac
+
+  if enabled "$show_eval" && [[ "${id,,}" == *"-eval" ]]; then
+    desc+=" (Evaluation)"
+  fi
+
+  echo "$desc"
+  return 0
+}
+
+formatEdition() {
+
+  local edition="${1//-/ }"
+
+  local result="" word
+
+  for word in $edition; do
+    if [ "$word" == "for" ]; then
+      word="for"
+    elif [ "${#word}" -eq 1 ]; then
+      word="${word^^}"
+    else
+      word="${word^}"
+    fi
+
+    result+="${result:+ }$word"
+  done
+
+  echo "$result"
+  return 0
+}
+
 printEdition() {
 
   local id="$1"
   local desc="$2"
-  local result=""
-  local edition=""
+  local show_eval="${3:-N}"
+
+  local normalized="${id,,}"
+  local result edition="" suffix=""
 
   result=$(printVersion "$id" "x")
   [[ "$result" == "x" ]] && echo "$desc" && return 0
 
-  case "${id,,}" in
-    *"-enterprise" )
-      edition="Enterprise"
-      ;;
-    *"-iot" | *"-iot-eval" )
-      edition="LTSC"
-      ;;
-    *"-ltsc" | *"-ltsc-eval" )
-      edition="LTSC"
-      ;;
-    *"-enterprise-eval" )
-      edition="Enterprise (Evaluation)"
-      ;;
+  normalized="${normalized%-eval}"
+
+  case "$normalized" in
     "win10"* | "win11"* )
-      edition="Pro"
+      [[ "$normalized" == *"-"* ]] && suffix="${normalized#*-}"
+
+      case "$suffix" in
+        "" ) edition="Pro" ;;
+        "n" ) edition="Pro N" ;;
+        "home" ) edition="Home" ;;
+        "starter" ) edition="Starter" ;;
+        "ultimate" ) edition="Ultimate" ;;
+        "enterprise" ) edition="Enterprise" ;;
+        "education" ) edition="Education" ;;
+        "iot" | "enterprise-iot" ) edition="IoT Enterprise LTSC" ;;
+        "ltsc" | "enterprise-ltsc" ) edition="Enterprise LTSC" ;;
+        * ) edition=$(formatEdition "$suffix") ;;
+      esac
       ;;
   esac
 
   [ -n "$edition" ] && result+=" $edition"
+
+  if enabled "$show_eval" && [[ "${id,,}" == *"-eval" ]]; then
+    result+=" (Evaluation)"
+  fi
 
   echo "$result"
   return 0
@@ -472,30 +262,20 @@ fromFile() {
   file="${file// /_}"
 
   case "$file" in
-    *"_x64_"* | *"_x64."*)
-      arch="x64"
-      ;;
-    *"_x86_"* | *"_x86."*)
-      arch="x86"
-      ;;
-    *"_arm64_"* | *"_arm64."*)
-      arch="arm64"
-      ;;
+    *"_x64_"* | *"_x64."*) arch="x64" ;;
+    *"_x86_"* | *"_x86."*) arch="x86" ;;
+    *"_arm64_"* | *"_arm64."*) arch="arm64" ;;
   esac
 
   case "$file" in
     "tiny11core"* | "tiny11_core"* | "tiny_11_core"* )
-      id="core11"
-      ;;
+      id="core11" ;;
     "tiny11"* | "tiny_11"* )
-      id="tiny11"
-      ;;
+      id="tiny11" ;;
     "win10"*| "win_10"* | *"windows10"* | *"windows_10"* )
-      id="win10${arch}"
-      ;;
+      id="win10${arch}" ;;
     "win11"* | "win_11"* | *"windows11"* | *"windows_11"* )
-      id="win11${arch}"
-      ;;
+      id="win11${arch}" ;;
   esac
 
   if [ -n "$id" ]; then
@@ -525,34 +305,275 @@ fromName() {
 
 getVersion() {
 
-  local id
+  local id edition
   local name="$1"
   local arch="$2"
+  local evaluation=""
 
   id=$(fromName "$name" "$arch")
+  [ -z "$id" ] && return 0
 
-  case "${id,,}" in
-    "win10"* | "win11"* )
-       case "${name,,}" in
-          *" iot"* ) id="$id-ltsc" ;;
-          *" ltsc"* ) id="$id-ltsc" ;;
-          *" enterprise evaluation"* ) id="$id-enterprise-eval" ;;
-          *" enterprise"* ) id="$id-enterprise" ;;
-        esac
-      ;;
-  esac
+  [[ "${name,,}" == *"evaluation"* ]] && evaluation="-eval"
+
+  if edition=$(getEditionID "$name" "$id"); then
+    [ -n "$edition" ] && id+="-$edition"
+    [ -n "$evaluation" ] && id+="$evaluation"
+  fi
 
   echo "$id"
   return 0
 }
 
-switchEdition() {
+isClientEdition() {
+
+  case "${1,,}" in
+    "pro" | "professional" | "business" | \
+    "enterprise" | "ultimate" | "education" | \
+    "home" | "homepremium" | "home-premium" | \
+    "homebasic" | "home-basic" | "starter" | "core" )
+      return 0 ;;
+  esac
+
+  return 1
+}
+
+getEditionRank() {
+
+  local id="${1,,}"
+  local base="${id%%-*}"
+  local edition
+
+  id="${id%-eval}"
+  edition="${id#"$base"}"
+  edition="${edition#-}"
+
+  case "$edition" in
+    "enterprise-iot" | "enterprise-iot-"* | "iot" | "iot-"* ) echo 3 ;;
+    "enterprise-ltsc" | "enterprise-ltsc-"* | "ltsc" | "ltsc-"* ) echo 4 ;;
+    "pro-education" | "pro-education-"* | "education" | "education-"* ) echo 5 ;;
+    "enterprise" | "enterprise-"* ) echo 0 ;;
+    "ultimate" | "ultimate-"* ) echo 1 ;;
+    "" | "n" | "pro" | "pro-"* | "professional" | "professional-"* | \
+    "business" | "business-"* ) echo 2 ;;
+    "home" | "home-"* ) echo 6 ;;
+    "starter" | "starter-"* ) echo 7 ;;
+    * ) echo 99 ;;
+  esac
+
+  return 0
+}
+
+getEditionPolicy() {
+
+  printf '%s\n' \
+    "normalizeEditionID" \
+    "-enterprise" \
+    "-ultimate" \
+    "" \
+    "-iot" \
+    "-ltsc" \
+    "-education" \
+    "-home" \
+    "-home-premium" \
+    "-home-basic" \
+    "-starter"
+
+  return 0
+}
+
+normalizeEdition() {
+
+  local source="${1,,}"
+  local edition transliterated
+
+  source="${source//evaluation/}"
+
+  if transliterated=$(printf '%s' "$source" |
+    uconv -x 'Any-Latin; Latin-ASCII' 2>/dev/null); then
+    source="$transliterated"
+  fi
+
+  edition=$(sed -E \
+    -e 's/[^a-z0-9]+/-/g' \
+    -e 's/^-+//' \
+    -e 's/-+$//' \
+    <<< "$source") || edition=""
+
+  echo "$edition"
+  return 0
+}
+
+normalizeEditionID() {
+
+  local edition base
+  local id="$2"
+
+  edition=$(normalizeEdition "$1") || return 1
+
+  case "$edition" in
+
+    "pro" | "professional" | "business" )
+      edition="" ;;
+
+    "pro-n" | "pron" | "professional-n" | "professionaln" | "business-n" | "businessn" )
+      edition="n" ;;
+
+    * )
+
+      if ! isClientEdition "$edition"; then
+
+        case "$edition" in
+          *"-n" ) base="${edition%-n}" ;;
+          *"n" ) base="${edition%n}" ;;
+          * ) base="" ;;
+        esac
+
+        if [ -n "$base" ] && isClientEdition "$base"; then
+          edition="$base-n"
+        fi
+
+      fi ;;
+
+  esac
+
+  case "${id,,}" in
+
+    "win10"* | "win11"* )
+
+      case "$edition" in
+        "iot-enterprise-ltsc" | \
+        "iot-enterprise-ltsc-"[0-9][0-9][0-9][0-9] )
+          edition="iot" ;;
+        "enterprise-ltsc" | \
+        "enterprise-ltsc-"[0-9][0-9][0-9][0-9] )
+          edition="ltsc" ;;
+      esac ;;
+
+  esac
+
+  echo "$edition"
+  return 0
+}
+
+getEditionID() {
+
+  local name="${1,,}"
+  local id="${2,,}"
+
+  local edition
+
+  case "$id" in
+    "win10"* ) edition="${name#*10}" ;;
+    "win11"* ) edition="${name#*11}" ;;
+    * ) return 1 ;;
+  esac
+
+  edition=$(normalizeEditionID "$edition" "$id") || return 1
+
+  echo "$edition"
+  return 0
+}
+
+normalizeServerEdition() {
+
+  : "${1:-}"
+  return 0
+}
+
+normalizeServerEditionID() {
+
+  : "${1:-}"
+  return 0
+}
+
+getServerEditionID() {
+
+  : "${1:-}" "${2:-}"
+  return 0
+}
+
+getRequiredMemory() {
+
+  local id="${1,,}"
+
+  case "$id" in
+    "win11"* )
+      echo "2G" ;;
+    "tiny11"* | "core11"* )
+      echo "2G" ;;
+    "win10"* | "tiny10"* )
+      echo "2G" ;;
+    * )
+      echo "2G" ;;
+  esac
+
+  return 0
+}
+
+getRequiredDisk() {
+
+  local id="${1,,}"
+
+  case "$id" in
+    "win11"* )
+      echo "32G" ;;
+    "tiny11"* )
+      echo "8G" ;;
+    "core11"* )
+      echo "4G" ;;
+    "win10"* )
+      echo "16G" ;;
+    * )
+      echo "4G" ;;
+  esac
+
+  return 0
+}
+
+isLegacy() {
+
+  : "$1"
+
+  return 1
+}
+
+supportsUnattended() {
+
+  : "$1"
+
+  return 0
+}
+
+supportsXML() {
+
+  : "$1"
+
+  return 0
+}
+
+supportsSIF() {
+
+  : "$1"
+
+  return 1
+}
+
+supportsBootKey() {
+
+  : "$1"
+
+  return 0
+}
+
+getDriverFolder() {
 
   local id="$1"
 
-  if [[ "${id,,}" == *"-eval" ]]; then
-    [ -z "$DETECTED" ] && DETECTED="${id::-5}"
-  fi
+  case "${id,,}" in
+    "win10arm64"* )   echo "w10/ARM64" ;;
+    "win11arm64"* )   echo "w11/ARM64" ;;
+    * )               return 1 ;;
+  esac
 
   return 0
 }
@@ -562,9 +583,8 @@ getMido() {
   local id="$1"
   local lang="$2"
   local ret="$3"
-  local url=""
-  local sum=""
-  local size=""
+
+  local url="" sum="" size=""
 
   [[ "${id,,}" == "win11"* ]] && ! isCompatible && return 0
   [[ "${lang,,}" != "en" && "${lang,,}" != "en-us" ]] && return 0
@@ -583,14 +603,19 @@ getMido() {
     "win11arm64-enterprise-ltsc-eval" )
       size=5042194432
       sum="3dcdba9c9c0aa0430d4332b60c9afcb3cd613d648a49cbba2d4ef7b5978f32e8"
-      url="https://software-static.download.prss.microsoft.com/dbazure/888969d5-f34g-4e03-ac9d-1f9786c66749/26100.1.240331-1435.ge_release_CLIENT_IOT_LTSC_EVAL_A64FRE_en-us.iso"
+      url="https://software-static.download.prss.microsoft.com/dbazure/998969d5-f34g-4e03-ac9d-1f9786c66749/26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_IOT_LTSC_EVAL_A64FRE_en-us.iso"
+      ;;
+    "win11arm64-enterprise-iot-eval" )
+      size=5042194432
+      sum="3dcdba9c9c0aa0430d4332b60c9afcb3cd613d648a49cbba2d4ef7b5978f32e8"
+      url="https://software-static.download.prss.microsoft.com/dbazure/998969d5-f34g-4e03-ac9d-1f9786c66749/26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_IOT_LTSC_EVAL_A64FRE_en-us.iso"
       ;;
   esac
 
   case "${ret,,}" in
     "sum" ) echo "$sum" ;;
     "size" ) echo "$size" ;;
-    *) echo "$url";;
+    * ) echo "$url";;
   esac
 
   return 0
@@ -603,31 +628,40 @@ getLink1() {
   local id="$1"
   local lang="$2"
   local ret="$3"
-  local url=""
-  local sum=""
-  local size=""
+
+  local url="" sum="" size=""
   local host="https://dl.bobpony.com/windows"
 
   [[ "${id,,}" == "win11"* ]] && ! isCompatible && return 0
   [[ "${lang,,}" != "en" && "${lang,,}" != "en-us" ]] && return 0
 
   case "${id,,}" in
-    "win11arm64" | "win11arm64-enterprise" | "win11arm64-enterprise-eval" )
-      size=5219411968
-      sum="dbd54452c3c20b4625f511dae3c3e057270448fb661232d4fa66279f59a63157"
-      url="11/en-us_windows_11_24h2_arm64.iso"
+    "win11arm64" | "win11arm64-enterprise" )
+      size=6812594176
+      sum="8d208f5a09de418fa6c3731b3c78410a1eecd9593ac774d820065f8d0a0f697c"
+      url="11/en-us_windows_11_25h2_arm64.iso"
       ;;
-    "win11arm64-ltsc" | "win11arm64-enterprise-ltsc" | "win11arm64-enterprise-ltsc-eval" )
+    "win11arm64-ltsc" | "win11arm64-enterprise-ltsc" )
       size=5121449984
       sum="f8f068cdc90c894a55d8c8530db7c193234ba57bb11d33b71383839ac41246b4"
       url="11/X23-81950_26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_ENTERPRISES_OEM_A64FRE_en-us.iso"
       ;;
-    "win10arm64" | "win10arm64-enterprise" | "win10arm64-enterprise-eval" )
-      size=4689637376
-      sum="7b43e64f4e3b961a83f9b70efa4b9d863bc5c348fe86d75917ac974116d17227"
+    "win11arm64-iot" | "win11arm64-enterprise-iot" )
+      size=5121449984
+      sum="f8f068cdc90c894a55d8c8530db7c193234ba57bb11d33b71383839ac41246b4"
+      url="11/X23-81950_26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_ENTERPRISES_OEM_A64FRE_en-us.iso"
+      ;;
+    "win10arm64" | "win10arm64-enterprise" )
+      size=4910370816
+      sum="eb81ec03106683e53eb83cd8a5d7685f584c351f209f8acca07535bc1aa25dd5"
       url="10/en-us_windows_10_22h2_arm64.iso"
       ;;
-    "win10arm64-ltsc" | "win10arm64-enterprise-ltsc" | "win10arm64-enterprise-ltsc-eval" )
+    "win10arm64-ltsc" | "win10arm64-enterprise-ltsc" )
+      size=4430471168
+      sum="d265df49b30a1477d010c79185a7bc88591a1be4b3eb690c994bed828ea17c00"
+      url="10/en-us_windows_10_iot_enterprise_ltsc_2021_arm64_dvd_e8d4fc46.iso"
+      ;;
+    "win10arm64-iot" | "win10arm64-enterprise-iot" )
       size=4430471168
       sum="d265df49b30a1477d010c79185a7bc88591a1be4b3eb690c994bed828ea17c00"
       url="10/en-us_windows_10_iot_enterprise_ltsc_2021_arm64_dvd_e8d4fc46.iso"
@@ -637,7 +671,7 @@ getLink1() {
   case "${ret,,}" in
     "sum" ) echo "$sum" ;;
     "size" ) echo "$size" ;;
-    *) [ -n "$url" ] && echo "$host/$url";;
+    * ) [ -n "$url" ] && echo "$host/$url";;
   esac
 
   return 0
@@ -650,18 +684,17 @@ getLink2() {
   local id="$1"
   local lang="$2"
   local ret="$3"
-  local url=""
-  local sum=""
-  local size=""
+
+  local url="" sum="" size=""
   local host="https://dl.bobpony.com/windows"
 
   isCompatible && return 0
   [[ "${lang,,}" != "en" && "${lang,,}" != "en-us" ]] && return 0
 
   case "${id,,}" in
-    "win11arm64" | "win11arm64-enterprise" | "win11arm64-enterprise-eval" )
-      size=6565922816
-      sum="a05a7aeb2d55d6f3c1981228f94b1c49d23dc4c12baa8a1abbad6940c918d26b"
+    "win11arm64" | "win11arm64-enterprise" )
+      size=6755211264
+      sum="bde2bcefe470bd19eb6cb810f38478dbd6809f04bac20c26ff27d4c9b864f662"
       url="11/en-us_windows_11_23h2_arm64.iso"
       ;;
   esac
@@ -669,7 +702,7 @@ getLink2() {
   case "${ret,,}" in
     "sum" ) echo "$sum" ;;
     "size" ) echo "$size" ;;
-    *) [ -n "$url" ] && echo "$host/$url";;
+    * ) [ -n "$url" ] && echo "$host/$url";;
   esac
 
   return 0
@@ -680,56 +713,65 @@ getLink3() {
   local id="$1"
   local lang="$2"
   local ret="$3"
-  local url=""
-  local sum=""
-  local size=""
+
+  local url="" sum="" size=""
   local host="https://archive.org/download"
 
   [[ "${id,,}" == "win11"* ]] && ! isCompatible && return 0
   [[ "${lang,,}" != "en" && "${lang,,}" != "en-us" ]] && return 0
 
   case "${id,,}" in
-    "tiny11" )
-      size=4480499712
-      sum="ec6056aa554c17290224af23e1b99961fe99606bb5ea9102d61838939c63325b"
-      url="tiny11a64/tiny11a64%20r1.iso"
-      ;;
-    "core11" )
-      size=3300327424
-      sum="812dae6b5bf5215db63b61ae10d8f0ffd3aa8529a18d96e9ced53341e2c676ec"
-      url="tiny11-core-arm64/tiny11%20core%20arm64.iso"
-      ;;
     "win11arm64" )
       size=5460387840
       sum="57d1dfb2c6690a99fe99226540333c6c97d3fd2b557a50dfe3d68c3f675ef2b0"
-      url="windows-11-24h2-arm64-iso/Win11_24H2_English_Arm64.iso"
+      url="Windows11_24H2_Arm64_ISO/Win11_24H2_English_Arm64.iso"
       ;;
-    "win11arm64-enterprise" | "win11arm64-enterprise-eval" )
+    "win11arm64-enterprise" )
       size=6872444928
       sum="2bf0fd1d5abd267cd0ae8066fea200b3538e60c3e572428c0ec86d4716b61cb7"
       url="win11-23h2-en-fr/ARM64/SW_DVD9_Win_Pro_11_23H2_Arm64_English_Pro_Ent_EDU_N_MLF_X23-59519.ISO"
       ;;
-    "win11arm64-ltsc" | "win11arm64-enterprise-ltsc" | "win11arm64-enterprise-ltsc-eval" )
+    "win11arm64-ltsc" | "win11arm64-enterprise-ltsc" )
       size=5121449984
       sum="f8f068cdc90c894a55d8c8530db7c193234ba57bb11d33b71383839ac41246b4"
       url="Windows11LTSC/X23-81950_26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_ENTERPRISES_OEM_A64FRE_en-us.iso"
       ;;
-    "win10arm64" | "win10arm64-enterprise" | "win10arm64-enterprise-eval" )
+    "win11arm64-iot" | "win11arm64-enterprise-iot" )
+      size=5121449984
+      sum="f8f068cdc90c894a55d8c8530db7c193234ba57bb11d33b71383839ac41246b4"
+      url="Windows11LTSC/X23-81950_26100.1742.240906-0331.ge_release_svc_refresh_CLIENT_ENTERPRISES_OEM_A64FRE_en-us.iso"
+      ;;
+    "win10arm64" | "win10arm64-enterprise" )
       size=5192060928
       sum="101079b911c8c3dd9c9a88499a16b930fbf00cbaf901761d8265bb3a8fcd9ea9"
       url="win-pro-10-22-h-2.15-arm-64-eng-intl-pro-ent-edu-n-mlf-x-23-67222/Win_Pro_10_22H2.15_Arm64_Eng_Intl_Pro_Ent_EDU_N_MLF_X23-67222.ISO"
       ;;
-    "win10arm64-ltsc" | "win10arm64-enterprise-ltsc" | "win10arm64-enterprise-ltsc-eval" )
+    "win10arm64-ltsc" | "win10arm64-enterprise-ltsc" )
       size=4430471168
       sum="d265df49b30a1477d010c79185a7bc88591a1be4b3eb690c994bed828ea17c00"
       url="windows-10-enterprise-ltsc-full-collection/en-us_windows_10_iot_enterprise_ltsc_2021_arm64_dvd_e8d4fc46.iso"
+      ;;
+    "win10arm64-iot" | "win10arm64-enterprise-iot" )
+      size=4430471168
+      sum="d265df49b30a1477d010c79185a7bc88591a1be4b3eb690c994bed828ea17c00"
+      url="windows-10-enterprise-ltsc-full-collection/en-us_windows_10_iot_enterprise_ltsc_2021_arm64_dvd_e8d4fc46.iso"
+      ;;
+    "tiny11" )
+      size=5554755584
+      sum="5c5d45799e1664d81802d1d5a85b9e50c1dcf278e1d2e7e10e3328fc8dd4615c"
+      url="tiny11_25H2/tiny11_25H2_Oct25_arm64.iso"
+      ;;
+    "core11" )
+      size=3307509760
+      sum="dbc533be2e3a679c548eb9e11b7827d0be9b7aea8d9fea8288fceba4965139e1"
+      url="tiny11_25H2/tiny11core_25H2_Oct25_arm64.iso"
       ;;
   esac
 
   case "${ret,,}" in
     "sum" ) echo "$sum" ;;
     "size" ) echo "$size" ;;
-    *) [ -n "$url" ] && echo "$host/$url";;
+    * ) [ -n "$url" ] && echo "$host/$url" ;;
   esac
 
   return 0
@@ -740,16 +782,15 @@ getLink4() {
   local id="$1"
   local lang="$2"
   local ret="$3"
-  local url=""
-  local sum=""
-  local size=""
+
+  local url="" sum="" size=""
   local host="https://archive.org/download"
 
   isCompatible && return 0
   [[ "${lang,,}" != "en" && "${lang,,}" != "en-us" ]] && return 0
 
   case "${id,,}" in
-    "win11arm64" | "win11arm64-enterprise" | "win11arm64-enterprise-eval" )
+    "win11arm64" | "win11arm64-enterprise" )
       size=6872444928
       sum="2bf0fd1d5abd267cd0ae8066fea200b3538e60c3e572428c0ec86d4716b61cb7"
       url="win11-23h2-en-fr/ARM64/SW_DVD9_Win_Pro_11_23H2_Arm64_English_Pro_Ent_EDU_N_MLF_X23-59519.ISO"
@@ -759,21 +800,45 @@ getLink4() {
   case "${ret,,}" in
     "sum" ) echo "$sum" ;;
     "size" ) echo "$size" ;;
-    *) [ -n "$url" ] && echo "$host/$url";;
+    * ) [ -n "$url" ] && echo "$host/$url";;
   esac
 
   return 0
 }
 
+initMirrors() {
+
+  MIRRORS="$1"
+  MIRROR_ORDER=()
+
+  local i
+  for ((i=1;i<MIRRORS;i++)); do
+    MIRROR_ORDER+=("$i")
+  done
+
+  for ((i=${#MIRROR_ORDER[@]}-1;i>0;i--)); do
+    local j=$((RANDOM % (i + 1)))
+    local tmp="${MIRROR_ORDER[i]}"
+    MIRROR_ORDER[i]="${MIRROR_ORDER[j]}"
+    MIRROR_ORDER[j]="$tmp"
+  done
+
+  MIRROR_ORDER+=("$MIRRORS")
+  return 0
+}
+
 getValue() {
 
-  local val=""
+  local index="$1"
   local id="$2"
   local lang="$3"
   local type="$4"
-  local func="getLink$1"
 
-  if [ "$1" -gt 0 ] && [ "$1" -le "$MIRRORS" ]; then
+  local val=""
+
+  if [ "$index" -gt 0 ] && [ "$index" -le "$MIRRORS" ]; then
+    local mirror="${MIRROR_ORDER[$((index - 1))]}"
+    local func="getLink$mirror"
     val=$($func "$id" "$lang" "$type")
   fi
 
@@ -783,29 +848,17 @@ getValue() {
 
 getLink() {
 
-  local url
-  url=$(getValue "$1" "$2" "$3" "")
-
-  echo "$url"
-  return 0
+  getValue "$1" "$2" "$3" ""
 }
 
 getHash() {
 
-  local sum
-  sum=$(getValue "$1" "$2" "$3" "sum")
-
-  echo "$sum"
-  return 0
+  getValue "$1" "$2" "$3" "sum"
 }
 
 getSize() {
 
-  local size
-  size=$(getValue "$1" "$2" "$3" "size")
-
-  echo "$size"
-  return 0
+  getValue "$1" "$2" "$3" "size"
 }
 
 isMido() {
@@ -814,7 +867,7 @@ isMido() {
   local lang="$2"
   local sum
 
-  [[ "${MIDO:-}" == [Nn]* ]] && return 1
+  disabled "${MIDO:-}" && return 1
 
   sum=$(getMido "$id" "en" "sum")
   [ -n "$sum" ] && return 0
@@ -827,18 +880,13 @@ isESD() {
   local id="$1"
   local lang="$2"
 
-  [[ "${ESD:-}" == [Nn]* ]] && return 1
+  disabled "${ESD:-}" && return 1
 
   case "${id,,}" in
-    "win11${PLATFORM,,}" | "win10${PLATFORM,,}" )
-      return 0
-      ;;
-    "win11${PLATFORM,,}-enterprise" | "win11${PLATFORM,,}-enterprise-eval")
-      return 0
-      ;;
-    "win10${PLATFORM,,}-enterprise" | "win10${PLATFORM,,}-enterprise-eval" )
-      return 0
-      ;;
+    "win11${PLATFORM,,}" | \
+    "win10${PLATFORM,,}" | \
+    "win11${PLATFORM,,}-enterprise" | \
+    "win10${PLATFORM,,}-enterprise" ) return 0 ;;
   esac
 
   return 1
@@ -848,10 +896,13 @@ validVersion() {
 
   local id="$1"
   local lang="$2"
-  local url
+  local url i
+
+  isMido "$id" "$lang" && return 0
+
+  [[ "${id,,}" == *"-eval" ]] && id="${id::-5}"
 
   isESD "$id" "$lang" && return 0
-  isMido "$id" "$lang" && return 0
 
   for ((i=1;i<=MIRRORS;i++)); do
 
@@ -863,43 +914,237 @@ validVersion() {
   return 1
 }
 
-addFolder() {
+isCompatible() {
 
-  local src="$1"
-  local folder="/oem"
-
-  [ ! -d "$folder" ] && folder="/OEM"
-  [ ! -d "$folder" ] && folder="$STORAGE/oem"
-  [ ! -d "$folder" ] && folder="$STORAGE/OEM"
-  [ ! -d "$folder" ] && return 0
-
-  local msg="Adding OEM folder to image..."
-  info "$msg" && html "$msg"
-
-  local dest="$src/\$OEM\$/\$1/OEM"
-  mkdir -p "$dest" || return 1
-  cp -Lr "$folder/." "$dest" || return 1
-
-  local file
-  file=$(find "$dest" -maxdepth 1 -type f -iname install.bat -print -quit)
-  [ -f "$file" ] && unix2dos -q "$file"
+  # ARMv8.0 cannot run Windows 11 builds 24H2 and up.
+  if [[ "${ARCH,,}" == "arm64" ]] && ! hasFeature atomics; then
+    return 1
+  fi
 
   return 0
 }
 
-detectLegacy() {
-  return 1
-}
+getLanguage() {
 
-prepareLegacy() {
-  return 1
-}
+  local source="$1"
+  local input="${1,,}"
+  local ret="$2"
 
-skipVersion() {
-  return 1
-}
+  local id="$source" lang="" desc="" short="" culture=""
 
-setMachine() {
+  case "$input" in
+    "ar" | "ar-"* | "arabic" | "arab" )
+      [[ "$input" == "arabic" || "$input" == "arab" ]] && id="ar"
+      short="ar"
+      lang="Arabic"
+      culture="ar-SA" ;;
+    "bg" | "bg-"* | "bulgarian" | "bu" )
+      [[ "$input" == "bulgarian" || "$input" == "bu" ]] && id="bg"
+      short="bg"
+      lang="Bulgarian"
+      culture="bg-BG" ;;
+    "cs" | "cs-"* | "cz" | "cz-"* | "czech" | "cesky" )
+      [[ "$input" == "cz" || "$input" == "czech" || "$input" == "cesky" ]] && id="cs"
+      short="cs"
+      lang="Czech"
+      culture="cs-CZ" ;;
+    "da" | "da-"* | "dk" | "dk-"* | "danish" | "danske" )
+      [[ "$input" == "dk" || "$input" == "danish" || "$input" == "danske" ]] && id="da"
+      short="da"
+      lang="Danish"
+      culture="da-DK" ;;
+    "de" | "de-"* | "german" | "deutsch" )
+      [[ "$input" == "german" || "$input" == "deutsch" ]] && id="de"
+      short="de"
+      lang="German"
+      culture="de-DE" ;;
+    "el" | "el-"* | "gr" | "gr-"* | "greek" )
+      [[ "$input" == "gr" || "$input" == "greek" ]] && id="el"
+      short="el"
+      lang="Greek"
+      culture="el-GR" ;;
+    "gb" | "en-gb" | "british" )
+      [[ "$input" == "gb" || "$input" == "british" ]] && id="en-gb"
+      short="en-gb"
+      lang="English International"
+      desc="English"
+      culture="en-GB" ;;
+    "en" | "en-"* | "english" )
+      [[ "$input" == "english" ]] && id="en"
+      short="en"
+      lang="English"
+      culture="en-US" ;;
+    "mx" | "es-mx" )
+      short="mx"
+      lang="Spanish (Mexico)"
+      desc="Spanish"
+      culture="es-MX" ;;
+    "es" | "es-"* | "spanish" | "espanol" | "español" )
+      [[ "$input" == "spanish" || "$input" == "espanol" || "$input" == "español" ]] && id="es"
+      short="es"
+      lang="Spanish"
+      culture="es-ES" ;;
+    "et" | "et-"* | "estonian" | "eesti" )
+      [[ "$input" == "estonian" || "$input" == "eesti" ]] && id="et"
+      short="et"
+      lang="Estonian"
+      culture="et-EE" ;;
+    "fi" | "fi-"* | "finnish" | "suomi" )
+      [[ "$input" == "finnish" || "$input" == "suomi" ]] && id="fi"
+      short="fi"
+      lang="Finnish"
+      culture="fi-FI" ;;
+    "ca" | "fr-ca" )
+      short="ca"
+      lang="French Canadian"
+      desc="French"
+      culture="fr-CA" ;;
+    "fr" | "fr-"* | "french" | "français" | "francais" )
+      [[ "$input" == "french" || "$input" == "français" || "$input" == "francais" ]] && id="fr"
+      short="fr"
+      lang="French"
+      culture="fr-FR" ;;
+    "he" | "he-"* | "il" | "il-"* | "hebrew" )
+      [[ "$input" == "il" || "$input" == "hebrew" ]] && id="he"
+      short="he"
+      lang="Hebrew"
+      culture="he-IL" ;;
+    "hr" | "hr-"* | "cr" | "cr-"* | "croatian" | "hrvatski" )
+      [[ "$input" == "cr" || "$input" == "croatian" || "$input" == "hrvatski" ]] && id="hr"
+      short="hr"
+      lang="Croatian"
+      culture="hr-HR" ;;
+    "hu" | "hu-"* | "hungarian" | "magyar" )
+      [[ "$input" == "hungarian" || "$input" == "magyar" ]] && id="hu"
+      short="hu"
+      lang="Hungarian"
+      culture="hu-HU" ;;
+    "it" | "it-"* | "italian" | "italiano" )
+      [[ "$input" == "italian" || "$input" == "italiano" ]] && id="it"
+      short="it"
+      lang="Italian"
+      culture="it-IT" ;;
+    "ja" | "ja-"* | "jp" | "jp-"* | "japanese" )
+      [[ "$input" == "jp" || "$input" == "japanese" ]] && id="ja"
+      short="ja"
+      lang="Japanese"
+      culture="ja-JP" ;;
+    "ko" | "ko-"* | "kr" | "kr-"* | "korean" )
+      [[ "$input" == "kr" || "$input" == "korean" ]] && id="ko"
+      short="ko"
+      lang="Korean"
+      culture="ko-KR" ;;
+    "lt" | "lt-"* | "lithuanian" | "lietuvos" )
+      [[ "$input" == "lithuanian" || "$input" == "lietuvos" ]] && id="lt"
+      short="lt"
+      lang="Lithuanian"
+      culture="lt-LT" ;;
+    "lv" | "lv-"* | "latvian" | "latvijas" )
+      [[ "$input" == "latvian" || "$input" == "latvijas" ]] && id="lv"
+      short="lv"
+      lang="Latvian"
+      culture="lv-LV" ;;
+    "nb" | "nb-"* | "nn" | "nn-"* | "no" | "no-"* | "norwegian" | "norsk" )
+      [[ "$input" == "nb" || "$input" == "no" || "$input" == "norwegian" || "$input" == "norsk" ]] && id="nn"
+      short="no"
+      lang="Norwegian"
+      culture="nb-NO" ;;
+    "nl" | "nl-"* | "dutch" | "nederlands" )
+      [[ "$input" == "dutch" || "$input" == "nederlands" ]] && id="nl"
+      short="nl"
+      lang="Dutch"
+      culture="nl-NL" ;;
+    "pl" | "pl-"* | "polish" | "polski" )
+      [[ "$input" == "polish" || "$input" == "polski" ]] && id="pl"
+      short="pl"
+      lang="Polish"
+      culture="pl-PL" ;;
+    "br" | "pt" | "pt-br" | "portuguese" | "português" | "portugues" )
+      [[ "$input" == "pt-br" ]] || id="pt-br"
+      short="pt"
+      lang="Brazilian Portuguese"
+      desc="Portuguese"
+      culture="pt-BR" ;;
+    "pt-"* )
+      short="pp"
+      lang="Portuguese"
+      culture="pt-PT" ;;
+    "ro" | "ro-"* | "romanian" | "română" | "romana" )
+      [[ "$input" == "romanian" || "$input" == "română" || "$input" == "romana" ]] && id="ro"
+      short="ro"
+      lang="Romanian"
+      culture="ro-RO" ;;
+    "ru" | "ru-"* | "russian" | "ruski" )
+      [[ "$input" == "russian" || "$input" == "ruski" ]] && id="ru"
+      short="ru"
+      lang="Russian"
+      culture="ru-RU" ;;
+    "sk" | "sk-"* | "slovak" | "slovenský" | "slovensky" )
+      [[ "$input" == "slovak" || "$input" == "slovenský" || "$input" == "slovensky" ]] && id="sk"
+      short="sk"
+      lang="Slovak"
+      culture="sk-SK" ;;
+    "sl" | "sl-"* | "si" | "si-"* | "slovenian" | "slovenski" )
+      [[ "$input" == "si" || "$input" == "slovenian" || "$input" == "slovenski" ]] && id="sl"
+      short="sl"
+      lang="Slovenian"
+      culture="sl-SI" ;;
+    "sr" | "sr-"* | "serbian" | "serbian latin" )
+      [[ "$input" == "serbian" || "$input" == "serbian latin" ]] && id="sr"
+      short="sr"
+      lang="Serbian Latin"
+      desc="Serbian"
+      culture="sr-Latn-RS" ;;
+    "sv" | "sv-"* | "se" | "se-"* | "swedish" | "svenska" )
+      [[ "$input" == "se" || "$input" == "swedish" || "$input" == "svenska" ]] && id="sv"
+      short="sv"
+      lang="Swedish"
+      culture="sv-SE" ;;
+    "th" | "th-"* | "thai" )
+      [[ "$input" == "thai" ]] && id="th"
+      short="th"
+      lang="Thai"
+      culture="th-TH" ;;
+    "tr" | "tr-"* | "turkish" | "türk" | "turk" )
+      [[ "$input" == "turkish" || "$input" == "türk" || "$input" == "turk" ]] && id="tr"
+      short="tr"
+      lang="Turkish"
+      culture="tr-TR" ;;
+    "ua" | "ua-"* | "uk" | "uk-"* | "ukrainian" )
+      [[ "$input" == "ua" || "$input" == "ukrainian" ]] && id="uk"
+      short="uk"
+      lang="Ukrainian"
+      culture="uk-UA" ;;
+    "hk" | "zh-hk" | "cn-hk" )
+      short="hk"
+      lang="Chinese (Traditional)"
+      desc="Chinese HK"
+      culture="zh-TW" ;;
+    "tw" | "zh-tw" | "cn-tw" )
+      short="tw"
+      lang="Chinese (Traditional)"
+      desc="Chinese TW"
+      culture="zh-TW" ;;
+    "zh" | "zh-"* | "cn" | "cn-"* | "chinese" )
+      [[ "$input" == "cn" || "$input" == "chinese" ]] && id="zh"
+      short="cn"
+      lang="Chinese (Simplified)"
+      desc="Chinese"
+      culture="zh-CN" ;;
+  esac
+
+  [ -z "$lang" ] && return 0
+  [ -z "$desc" ] && desc="$lang"
+
+  case "${ret,,}" in
+    "id" ) echo "$id" ;;
+    "desc" ) echo "$desc" ;;
+    "name" ) echo "$lang" ;;
+    "code" ) echo "$short" ;;
+    "culture" ) echo "$culture" ;;
+    * ) echo "$desc";;
+  esac
+
   return 0
 }
 
